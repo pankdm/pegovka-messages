@@ -1,19 +1,39 @@
 // Cargo.toml:
 // [dependencies]
 // image = "0.23.6"
+// lazy_static = "1.4.0"
 //
-// Usage:
-// cargo run input_file output_file
+// Usage
+// decode input file:
+//    cargo run input_file output_file
+// show all supported symbols:
+//    cargo run -- --show-all
 
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::Write;
 
 use image::Rgb;
 
+#[macro_use]
+extern crate lazy_static;
 
 const ZOOM: usize = 8;
 const SHIFT: usize = 2;
+
+lazy_static! {
+    static ref SYMBOLS: HashMap<i32, &'static str> = [
+        (0, "ap"),
+        (12, "=="),
+        (417, "inc"),
+        (401, "dec"),
+        (365, "sum"),
+    ]
+    .iter()
+    .copied()
+    .collect();
+}
 
 struct Svg {
     file: File,
@@ -50,14 +70,13 @@ impl Svg {
             .as_bytes(),
         );
     }
-
-    pub fn add_annotation(
+    pub fn add_raw_annotation(
         &mut self,
         x: usize,
         y: usize,
         dx: usize,
         dy: usize,
-        value: i32,
+        text: &String,
         control_bit: bool,
     ) {
         let color = if control_bit { "yellow" } else { "green" };
@@ -89,25 +108,31 @@ impl Svg {
                 y * ZOOM + (dy / 2) * ZOOM,
                 options,
                 style_options,
-                Svg::annotation_text(control_bit, value),
+                text,
             )
             .as_bytes(),
         );
+    }
+
+    pub fn add_annotation(
+        &mut self,
+        x: usize,
+        y: usize,
+        dx: usize,
+        dy: usize,
+        value: i32,
+        control_bit: bool,
+    ) {
+        let text = Svg::annotation_text(control_bit, value);
+        self.add_raw_annotation(x, y, dx, dy, &text, control_bit);
     }
 
     fn annotation_text(control_bit: bool, value: i32) -> String {
         if !control_bit {
             return value.to_string();
         }
-        let text = match value {
-            12 => "==",
-            417 => "inc",
-            401 => "dec",
-            0 => "ap",
-            365 => "sum",
-            _ => "",
-        };
-        return if text == "" {
+        let text = SYMBOLS.get(&value).unwrap_or(&"");
+        return if text == &"" {
             format!(":{}", value)
         } else {
             text.to_string()
@@ -225,11 +250,6 @@ fn parse_image(iw: &ImageWrapper, parsed: &mut BooleanGrid, svg: &mut Svg) {
                     value,
                     control_bit,
                 } => {
-                    // let name = if control_bit { "Control" } else { "Integer" };
-                    // println!(
-                    //     "Found {} Glyph at ({}, {}), value = {}, d = ({}, {})",
-                    //     name, x, y, value, dx, dy
-                    // );
                     mark_parsed(parsed, x, y, dx, dy);
                     svg.add_annotation(x, y, dx, dy, value, control_bit);
                 }
@@ -239,10 +259,109 @@ fn parse_image(iw: &ImageWrapper, parsed: &mut BooleanGrid, svg: &mut Svg) {
     println!("Done");
 }
 
+fn empty_image(width: usize, height: usize) -> Image {
+    let mut image = Vec::new();
+    for _ in 0..width {
+        image.push(vec![0; height]);
+    }
+    image
+}
+
+fn encode_symbol(value: i32) -> Image {
+    assert!(value >= 0);
+    // println!("Encoding {}", value);
+    let ln = if value == 0 {
+        1.0
+    } else {
+        (value as f32).log2().ceil()
+    };
+    let d = ln.sqrt().ceil() as usize;
+    // println!("  d = {}", d);
+    let mut image = empty_image(d + 1, d + 1);
+    for i in 0..=d {
+        image[i][0] = 1;
+        image[0][i] = 1;
+    }
+
+    for cy in 0..d {
+        for cx in 0..d {
+            let bit = 1 << (cx + cy * d);
+            // println!("    checking against {}", bit);
+            if (value & bit) > 0 {
+                image[1 + cx][1 + cy] = 1;
+            }
+        }
+    }
+
+    image
+}
+
+fn show_all_symbols() {
+    let mut images = Vec::new();
+    let mut keys = SYMBOLS.keys().collect::<Vec<&i32>>();
+    keys.sort();
+
+    let mut max_dx = 0;
+    let offset = 2;
+    let mut total_dy = offset;
+    for key in keys.iter() {
+        let image = encode_symbol(**key);
+        max_dx = max_dx.max(image.len());
+        total_dy += image[0].len() + 4;
+        images.push(image);
+    }
+
+    let svg_width = 3 * (max_dx + 4) as usize;
+    let svg_height = total_dy as usize;
+    let mut svg = Svg::new(
+        &"all_symbols.svg".to_string(),
+        svg_width,
+        svg_height,
+    );
+    // initally set all image to black
+    for x in 0..svg_width {
+        for y in 0..svg_height {
+            svg.set_pixel(x, y, value_to_svg_color(0));
+        }
+    }
+
+    let mut y0 = offset;
+    for index in 0..images.len() {
+        let image = &images[index];
+        for repeat in 0..3 {
+            let x0 = offset + (max_dx + 4) * repeat;
+            for dx in 0..image.len() {
+                for dy in 0..image[0].len() {
+                    if image[dx][dy] == 1 {
+                        svg.set_pixel(x0 + dx, y0 + dy, value_to_svg_color(1));
+                    }
+                }
+            }
+
+            if repeat == 1 {
+                let text = format!("{}", keys[index]);
+                svg.add_raw_annotation(x0, y0, image.len(), image[0].len(), &text, true);
+            }
+            if repeat == 2 {
+                svg.add_annotation(x0, y0, image.len(), image[0].len(), *keys[index], true);
+            }
+        }
+        y0 += image[0].len() + 4;
+    }
+
+    svg.close();
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     println!("Running {:?}", args);
     assert!(args.len() >= 2);
+    if args[1] == "--show-all" {
+        show_all_symbols();
+        return;
+    }
+
+    assert!(args.len() >= 3);
     let input_file = args[1].to_string();
     let output_file = args[2].to_string();
 
@@ -256,10 +375,9 @@ fn main() {
 
     // initialize empty data structures
     let mut parsed = Vec::new();
-    let mut image = Vec::new();
+    let mut image = empty_image(width as usize, height as usize);
     for _ in 0..width {
         parsed.push(vec![false; height as usize]);
-        image.push(vec![0; height as usize]);
     }
 
     for y in 0..height {

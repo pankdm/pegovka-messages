@@ -1,3 +1,7 @@
+// Cargo.toml:
+// [dependencies]
+// image = "0.23.6"
+//
 // Usage:
 // cargo run input_file output_file
 
@@ -7,30 +11,12 @@ use std::io::Write;
 
 use image::Rgb;
 
-// const FILE_NAME: &str = "input/message2.png";
-
-struct Svg {
-    file: File,
-}
 
 const ZOOM: usize = 8;
 const SHIFT: usize = 2;
 
-fn annotation_text(control_bit: bool, value: i32) -> String {
-    if !control_bit {
-        return value.to_string();
-    }
-    let text = match value {
-        12 => "==",
-        417 => "inc",
-        401 => "dec",
-        _ => "",
-    };
-    return if text == "" {
-        value.to_string()
-    } else {
-        text.to_string()
-    };
+struct Svg {
+    file: File,
 }
 
 #[allow(unused)]
@@ -92,7 +78,7 @@ impl Svg {
             "fill: white;",
             "stroke: black;",
             "stroke-width: 2px;",
-            "font: 20px bold sans;",
+            "font: 18px bold sans;",
         ]
         .join(" ");
 
@@ -103,30 +89,48 @@ impl Svg {
                 y * ZOOM + (dy / 2) * ZOOM,
                 options,
                 style_options,
-                annotation_text(control_bit, value),
+                Svg::annotation_text(control_bit, value),
             )
             .as_bytes(),
         );
     }
+
+    fn annotation_text(control_bit: bool, value: i32) -> String {
+        if !control_bit {
+            return value.to_string();
+        }
+        let text = match value {
+            12 => "==",
+            417 => "inc",
+            401 => "dec",
+            0 => "ap",
+            365 => "sum",
+            _ => "",
+        };
+        return if text == "" {
+            format!(":{}", value)
+        } else {
+            text.to_string()
+        };
+    }
 }
 
-fn rgb_to_color(pixel: &Rgb<u8>) -> String {
-    match pixel {
-        Rgb([0, 0, 0]) => "#333333".to_string(),
-        Rgb([255, 255, 255]) => "white".to_string(),
+fn value_to_svg_color(value: u8) -> String {
+    match value {
+        0 => "#333333".to_string(),
+        1 => "white".to_string(),
         _ => {
-            panic!("Unexpected value: {:?}", pixel);
+            panic!("Unexpected pixel: {:?}", value);
         }
     }
 }
 
-// TODO: unify with the above
 fn rgb_to_value(pixel: &Rgb<u8>) -> u8 {
     match pixel {
         Rgb([0, 0, 0]) => 0,
         Rgb([255, 255, 255]) => 1,
         _ => {
-            panic!("Unexpected value: {:?}", pixel);
+            panic!("Unexpected pixel: {:?}", pixel);
         }
     }
 }
@@ -221,22 +225,23 @@ fn parse_image(iw: &ImageWrapper, parsed: &mut BooleanGrid, svg: &mut Svg) {
                     value,
                     control_bit,
                 } => {
-                    let name = if control_bit { "Control" } else { "Integer" };
-                    println!(
-                        "Found {} Glyph at ({}, {}), value = {}, d = ({}, {})",
-                        name, x, y, value, dx, dy
-                    );
+                    // let name = if control_bit { "Control" } else { "Integer" };
+                    // println!(
+                    //     "Found {} Glyph at ({}, {}), value = {}, d = ({}, {})",
+                    //     name, x, y, value, dx, dy
+                    // );
                     mark_parsed(parsed, x, y, dx, dy);
                     svg.add_annotation(x, y, dx, dy, value, control_bit);
                 }
             }
         }
     }
+    println!("Done");
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    println!("{:?}", args);
+    println!("Running {:?}", args);
     assert!(args.len() >= 2);
     let input_file = args[1].to_string();
     let output_file = args[2].to_string();
@@ -249,7 +254,7 @@ fn main() {
 
     let mut svg = Svg::new(&output_file, width as usize, height as usize);
 
-    // initialize initial data structures
+    // initialize empty data structures
     let mut parsed = Vec::new();
     let mut image = Vec::new();
     for _ in 0..width {
@@ -260,10 +265,10 @@ fn main() {
     for y in 0..height {
         for x in 0..width {
             let pixel = img.get_pixel(scale * x, scale * y);
-            image[x as usize][y as usize] = rgb_to_value(pixel);
+            let value = rgb_to_value(pixel);
+            image[x as usize][y as usize] = value;
 
-            // println!("{}, {} -> {:?}", x, y, pixel);
-            let color = rgb_to_color(pixel);
+            let color = value_to_svg_color(value);
             svg.set_pixel(x as usize, y as usize, color);
         }
     }

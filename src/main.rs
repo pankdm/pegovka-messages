@@ -73,6 +73,16 @@ impl Svg {
             .as_bytes(),
         );
     }
+
+    pub fn glyph_to_color(glyph_type: GlyphType) -> String {
+        let color = match glyph_type {
+            GlyphType::Ineteger => "green",
+            GlyphType::Command => "yellow",
+            GlyphType::Variable => "blue",
+        };
+        return color.to_string();
+    }
+
     pub fn add_raw_annotation(
         &mut self,
         x: usize,
@@ -80,13 +90,9 @@ impl Svg {
         dx: usize,
         dy: usize,
         text: &String,
+        color: &String,
         glyph_type: GlyphType,
     ) {
-        let color = match glyph_type {
-            GlyphType::Ineteger => "green",
-            GlyphType::Command => "yellow",
-            GlyphType::Variable => "blue",
-        };
         self.file.write_all(
             format!(
                 "<rect x='{}' y='{}' width='{}' height='{}' style='fill:{};opacity:0.5'/>\n",
@@ -132,7 +138,8 @@ impl Svg {
         glyph: Glyph,
     ) {
         let text = Svg::annotation_text(glyph_type, glyph);
-        self.add_raw_annotation(x, y, dx, dy, &text, glyph_type);
+        let color = Svg::glyph_to_color(glyph_type);
+        self.add_raw_annotation(x, y, dx, dy, &text, &color, glyph_type);
     }
 
     fn annotation_text(glyph_type: GlyphType, glyph: Glyph) -> String {
@@ -444,6 +451,7 @@ fn show_symbols(mut tokens: Vec<Token>) {
                     image.len(),
                     image[0].len(),
                     &text,
+                    &"yellow".to_string(),
                     GlyphType::Command,
                 );
             }
@@ -470,6 +478,7 @@ fn show_symbols(mut tokens: Vec<Token>) {
                             image.len() - 2,
                             image[0].len() - 2,
                             &text,
+                            &"green".to_string(),
                             GlyphType::Ineteger,
                         );
                     }

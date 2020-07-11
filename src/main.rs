@@ -10,7 +10,9 @@
 //    cargo run -- --show-all
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
+use std::fs;
 use std::fs::File;
 use std::io::Write;
 
@@ -26,9 +28,15 @@ lazy_static! {
     static ref SYMBOLS: HashMap<i32, &'static str> = [
         (0, "ap"),
         (12, "=="),
+        (146, "mul"),
         (417, "inc"),
         (401, "dec"),
         (365, "sum"),
+        (485, ""),
+        (501, ""),
+        (65193, ""),
+        (65161, ""),
+        (64745, ""),
     ]
     .iter()
     .copied()
@@ -77,9 +85,13 @@ impl Svg {
         dx: usize,
         dy: usize,
         text: &String,
-        control_bit: bool,
+        glyph_type: GlyphType,
     ) {
-        let color = if control_bit { "yellow" } else { "green" };
+        let color = match glyph_type {
+            GlyphType::Ineteger => {"green"},
+            GlyphType::Command => {"yellow"},
+            GlyphType::Variable => {"blue"},
+        };
         self.file.write_all(
             format!(
                 "<rect x='{}' y='{}' width='{}' height='{}' style='fill:{};opacity:0.5'/>\n",
@@ -121,14 +133,14 @@ impl Svg {
         dx: usize,
         dy: usize,
         value: i32,
-        control_bit: bool,
+        glyph_type: GlyphType,
     ) {
-        let text = Svg::annotation_text(control_bit, value);
-        self.add_raw_annotation(x, y, dx, dy, &text, control_bit);
+        let text = Svg::annotation_text(glyph_type, value);
+        self.add_raw_annotation(x, y, dx, dy, &text, glyph_type);
     }
 
-    fn annotation_text(control_bit: bool, value: i32) -> String {
-        if !control_bit {
+    fn annotation_text(glyph_type: GlyphType, value: i32) -> String {
+        if glyph_type == GlyphType::Ineteger {
             return value.to_string();
         }
         let text = SYMBOLS.get(&value).unwrap_or(&"");
@@ -169,22 +181,56 @@ struct ImageWrapper {
     width: usize,
 }
 
+#[derive(PartialEq, Clone, Copy)]
+enum GlyphType {
+    Ineteger,
+    Command,
+    Variable,
+}
+
 enum ParseResult {
     None,
     Glyph {
         dx: usize,
         dy: usize,
         value: i32,
-        control_bit: bool,
+        glyph_type: GlyphType,
     },
 }
 
-fn try_parse_symbol(iw: &ImageWrapper, x: usize, y: usize) -> ParseResult {
+// delta boundary is not inclusive
+fn is_full_frame(image: &Image, x: usize, y: usize, delta: usize) -> bool {
+    for i in 0..delta {
+        if image[x][y + i] != 1 {
+            return false;
+        }
+        if image[x + delta - 1][y + 1] != 1 {
+            return false;
+        }
+        if image[x + i][y] != 1 {
+            return false;
+        }
+        if image[x + i][y + delta - 1] != 1 {
+            return false;
+        }
+    }
+    true
+}
+
+fn try_parse_symbol(iw: &ImageWrapper, x: usize, y: usize, set: u8) -> ParseResult {
     let image = &iw.image;
-    if image[x + 1][y] == 1 && image[x][y + 1] == 1 && image[x - 1][y] == 0 && image[x][y - 1] == 0
+    if image[x + 1][y] == set
+        && image[x][y + 1] == set
+        && image[x - 1][y] != set
+        && image[x][y - 1] != set
     {
         // control bit
-        let control_bit = image[x][y] == 1;
+        let control_bit = image[x][y] == set;
+        let mut glyph_type = if control_bit {
+            GlyphType::Command
+        } else {
+            GlyphType::Ineteger
+        };
 
         // Find proper delta
         let mut delta = 1;
@@ -193,24 +239,47 @@ fn try_parse_symbol(iw: &ImageWrapper, x: usize, y: usize) -> ParseResult {
             if x + delta >= iw.width || y + delta >= iw.height {
                 break;
             }
-            if image[x + delta][y] != 1 || image[x][y + delta] != 1 {
+            if image[x + delta][y] != set || image[x][y + delta] != set {
                 break;
             }
             delta += 1;
+        }
+        // check if it's a variable
+        if control_bit && is_full_frame(image, x, y, delta) && set == 1 {
+            // println!("Found full frame at ({}, {})", x, y);
+            let parse_result = try_parse_symbol(iw, x + 1, y + 1, 0);
+            match parse_result {
+                ParseResult::None => {
+                    println!(
+                        "Warning: embedded symbol not recognized at ({}, {}",
+                        x + 1,
+                        y + 1
+                    );
+                }
+                ParseResult::Glyph {
+                    dx,
+                    dy,
+                    value,
+                    glyph_type,
+                } => {
+                    println!("Found variable x{}", value);
+                }
+            }
+            glyph_type = GlyphType::Variable;
         }
 
         // Calculate overall value
         let mut value = 0 as i32;
         for cy in 0..(delta - 1) {
             for cx in 0..(delta - 1) {
-                if image[x + 1 + cx][y + 1 + cy] == 1 {
+                if image[x + 1 + cx][y + 1 + cy] == set {
                     value += 1 << (cy * (delta - 1) + cx) as i32;
                 }
             }
         }
         let extra_bit = image[x][y + delta];
         // extra bit indicate negative numbers
-        if extra_bit == 1 {
+        if extra_bit == set {
             value = -value;
         }
 
@@ -218,7 +287,7 @@ fn try_parse_symbol(iw: &ImageWrapper, x: usize, y: usize) -> ParseResult {
             dx: delta,
             dy: delta + extra_bit as usize,
             value: value,
-            control_bit: control_bit,
+            glyph_type: glyph_type,
         };
     } else {
         return ParseResult::None;
@@ -233,7 +302,8 @@ fn mark_parsed(parsed: &mut BooleanGrid, x: usize, y: usize, dx: usize, dy: usiz
     }
 }
 
-fn parse_image(iw: &ImageWrapper, parsed: &mut BooleanGrid, svg: &mut Svg) {
+fn parse_image(iw: &ImageWrapper, parsed: &mut BooleanGrid, svg: &mut Svg) -> Vec<i32> {
+    let mut codes = Vec::new();
     println!("Parsing image...");
     // skip boundaries
     for y in 1..(iw.height - 2) {
@@ -241,25 +311,29 @@ fn parse_image(iw: &ImageWrapper, parsed: &mut BooleanGrid, svg: &mut Svg) {
             if parsed[x][y] {
                 continue;
             }
-            let parse_result = try_parse_symbol(iw, x, y);
+            let parse_result = try_parse_symbol(iw, x, y, 1);
             match parse_result {
                 ParseResult::None => continue,
                 ParseResult::Glyph {
                     dx,
                     dy,
                     value,
-                    control_bit,
+                    glyph_type,
                 } => {
                     mark_parsed(parsed, x, y, dx, dy);
-                    svg.add_annotation(x, y, dx, dy, value, control_bit);
+                    svg.add_annotation(x, y, dx, dy, value, glyph_type);
+                    if glyph_type == GlyphType::Command || glyph_type == GlyphType::Variable {
+                        codes.push(value);
+                    }
                 }
             }
         }
     }
     println!("Done");
+    codes
 }
 
-fn empty_image(width: usize, height: usize) -> Image {
+fn create_empty_image(width: usize, height: usize) -> Image {
     let mut image = Vec::new();
     for _ in 0..width {
         image.push(vec![0; height]);
@@ -277,7 +351,7 @@ fn encode_symbol(value: i32) -> Image {
     };
     let d = ln.sqrt().ceil() as usize;
     // println!("  d = {}", d);
-    let mut image = empty_image(d + 1, d + 1);
+    let mut image = create_empty_image(d + 1, d + 1);
     for i in 0..=d {
         image[i][0] = 1;
         image[0][i] = 1;
@@ -296,16 +370,14 @@ fn encode_symbol(value: i32) -> Image {
     image
 }
 
-fn show_all_symbols() {
+fn show_symbols(mut codes: Vec<i32>) {
+    codes.sort();
     let mut images = Vec::new();
-    let mut keys = SYMBOLS.keys().collect::<Vec<&i32>>();
-    keys.sort();
-
     let mut max_dx = 0;
     let offset = 2;
     let mut total_dy = offset;
-    for key in keys.iter() {
-        let image = encode_symbol(**key);
+    for code in codes.iter() {
+        let image = encode_symbol(*code);
         max_dx = max_dx.max(image.len());
         total_dy += image[0].len() + 4;
         images.push(image);
@@ -313,11 +385,7 @@ fn show_all_symbols() {
 
     let svg_width = 3 * (max_dx + 4) as usize;
     let svg_height = total_dy as usize;
-    let mut svg = Svg::new(
-        &"all_symbols.svg".to_string(),
-        svg_width,
-        svg_height,
-    );
+    let mut svg = Svg::new(&"all_symbols.svg".to_string(), svg_width, svg_height);
     // initally set all image to black
     for x in 0..svg_width {
         for y in 0..svg_height {
@@ -339,11 +407,25 @@ fn show_all_symbols() {
             }
 
             if repeat == 1 {
-                let text = format!("{}", keys[index]);
-                svg.add_raw_annotation(x0, y0, image.len(), image[0].len(), &text, true);
+                let text = format!("{}", codes[index]);
+                svg.add_raw_annotation(
+                    x0,
+                    y0,
+                    image.len(),
+                    image[0].len(),
+                    &text,
+                    GlyphType::Command,
+                );
             }
             if repeat == 2 {
-                svg.add_annotation(x0, y0, image.len(), image[0].len(), *keys[index], true);
+                svg.add_annotation(
+                    x0,
+                    y0,
+                    image.len(),
+                    image[0].len(),
+                    codes[index],
+                    GlyphType::Command,
+                );
             }
         }
         y0 += image[0].len() + 4;
@@ -352,21 +434,60 @@ fn show_all_symbols() {
     svg.close();
 }
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    println!("Running {:?}", args);
-    assert!(args.len() >= 2);
-    if args[1] == "--show-all" {
-        show_all_symbols();
-        return;
+fn show_all_symbols_from_dict() {
+    let mut keys = Vec::new();
+    for key in SYMBOLS.keys() {
+        keys.push(*key);
+    }
+    show_symbols(keys);
+}
+
+pub fn split_string(s: &String, pattern: &str) -> Vec<String> {
+    let mut res = Vec::new();
+    for part in s.split(pattern) {
+        res.push(part.to_string());
+    }
+    return res;
+}
+
+fn get_default_output_file(input_file: &String) -> String {
+    assert_eq!(input_file.ends_with(".png"), true);
+    let parts = split_string(&input_file, "/");
+    let file_name = parts.last().unwrap();
+    let new_file_name = file_name.replace(".png", ".svg");
+    let output_file = format!("output/{}", new_file_name);
+    output_file
+}
+
+fn show_all_symbols_from_folder(folder: &String) {
+    let mut all_codes = HashSet::new();
+
+    let paths = fs::read_dir(folder).unwrap();
+    for path in paths {
+        let full_path = path.unwrap().path();
+        // println!("Found: {}", &full_path.display());
+        let input_file = full_path.to_str().unwrap().to_string();
+        if input_file.ends_with(".png") {
+            let output_file = get_default_output_file(&input_file);
+            let codes = parse_file(&input_file, &output_file);
+
+            for code in codes {
+                all_codes.insert(code);
+            }
+        }
     }
 
-    assert!(args.len() >= 3);
-    let input_file = args[1].to_string();
-    let output_file = args[2].to_string();
+    let mut all_codes_vec = Vec::new();
+    for code in all_codes {
+        all_codes_vec.push(code);
+    }
+    show_symbols(all_codes_vec);
+}
 
-    let img = image::open(input_file).unwrap().to_rgb();
-    println!("Img dimensions: {:?}", img.dimensions());
+fn parse_file(input_file: &String, output_file: &String) -> Vec<i32> {
+    println!("Processing {}, output -> {}", &input_file, &output_file);
+    let img = image::open(&input_file).unwrap().to_rgb();
+    println!("  Img dimensions: {:?}", img.dimensions());
     let scale = 4;
     let width = img.dimensions().0 / scale;
     let height = img.dimensions().1 / scale;
@@ -375,7 +496,7 @@ fn main() {
 
     // initialize empty data structures
     let mut parsed = Vec::new();
-    let mut image = empty_image(width as usize, height as usize);
+    let mut image = create_empty_image(width as usize, height as usize);
     for _ in 0..width {
         parsed.push(vec![false; height as usize]);
     }
@@ -397,7 +518,30 @@ fn main() {
         width: width as usize,
     };
 
-    parse_image(&iw, &mut parsed, &mut svg);
+    let codes = parse_image(&iw, &mut parsed, &mut svg);
+    svg.close();
+    codes
+}
 
-    svg.close()
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    println!("Running {:?}, len = {}", args, args.len());
+    assert!(args.len() >= 2);
+    if args[1] == "--show-all" {
+        if args.len() >= 3 {
+            show_all_symbols_from_folder(&args[2].to_string());
+        } else {
+            show_all_symbols_from_dict();
+        }
+        return;
+    }
+
+    let input_file = args[1].to_string();
+    let output_file = if args.len() >= 3 {
+        args[2].to_string()
+    } else {
+        get_default_output_file(&input_file)
+    };
+
+    parse_file(&input_file, &output_file);
 }

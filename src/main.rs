@@ -27,7 +27,7 @@ const ZOOM: usize = 8;
 const SHIFT: usize = 3;
 
 lazy_static! {
-    static ref LIST: Vec<(i32, &'static str)> = vec![
+    static ref SYMBOLS_LIST: Vec<(i32, &'static str)> = vec![
         (0, "ap"),
         (12, "=="),
         (417, "inc"),
@@ -36,7 +36,7 @@ lazy_static! {
         (146, "mul"),
         (40, "div"),
     ];
-    static ref SYMBOLS: HashMap<i32, &'static str> = LIST
+    static ref SYMBOLS: HashMap<i32, &'static str> = SYMBOLS_LIST
     .iter()
     .copied()
     .collect();
@@ -395,7 +395,7 @@ fn encode_symbol(value: i32) -> Image {
     image
 }
 
-fn show_symbols(tokens: Vec<Token>) {
+fn show_symbols(tokens: Vec<Token>, output_file: &String) {
     let mut images = Vec::new();
     let mut max_dx = 0;
     let offset = 2;
@@ -409,7 +409,7 @@ fn show_symbols(tokens: Vec<Token>) {
 
     let svg_width = 4 * (max_dx + 4) as usize;
     let svg_height = total_dy as usize;
-    let mut svg = Svg::new(&"all_symbols.svg".to_string(), svg_width, svg_height);
+    let mut svg = Svg::new(&output_file, svg_width, svg_height);
     // initally set all pixels to black
     for x in 0..svg_width {
         for y in 0..svg_height {
@@ -490,11 +490,11 @@ fn show_symbols(tokens: Vec<Token>) {
 
 fn show_all_symbols_from_dict() {
     let mut tokens = Vec::new();
-    for (code, _) in SYMBOLS.iter() {
+    for (code, _) in SYMBOLS_LIST.iter() {
         let glyph = Glyph::Command(*code);
         tokens.push((*code, glyph));
     }
-    show_symbols(tokens);
+    show_symbols(tokens, &"glyphs-dict.svg".to_string());
 }
 
 pub fn split_string(s: &String, pattern: &str) -> Vec<String> {
@@ -545,7 +545,7 @@ fn show_all_symbols_from_folder(folder: &String) {
         }
     });
 
-    show_symbols(all_tokens);
+    show_symbols(all_tokens, &"glyphs-all.svg".to_string());
 }
 
 fn parse_file(input_file: &String, output_file: &String) -> Vec<Token> {

@@ -35,6 +35,9 @@ lazy_static! {
         (365, "sum"),
         (146, "mul"),
         (40, "div"),
+        (448, "eq"),
+        (2, "true"),
+        (8, "false"),
     ];
     static ref SYMBOLS: HashMap<i32, &'static str> = SYMBOLS_LIST
     .iter()
@@ -372,7 +375,7 @@ fn encode_symbol(value: i32) -> Image {
     let ln = if value == 0 {
         1.0
     } else {
-        (value as f32).log2().ceil()
+        ((value + 1) as f32).log2().ceil()
     };
     let d = ln.sqrt().ceil() as usize;
     // println!("  d = {}", d);

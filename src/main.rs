@@ -39,10 +39,7 @@ lazy_static! {
         (2, "true"),
         (8, "false"),
     ];
-    static ref SYMBOLS: HashMap<i32, &'static str> = SYMBOLS_LIST
-    .iter()
-    .copied()
-    .collect();
+    static ref SYMBOLS: HashMap<i32, &'static str> = SYMBOLS_LIST.iter().copied().collect();
 }
 
 struct Svg {
@@ -539,13 +536,9 @@ fn show_all_symbols_from_folder(folder: &String) {
         }
     }
 
-    all_tokens.sort_by(|a, b| {
-        match (a.1, b.1) {
-            (Glyph::Variable(va), Glyph::Variable(vb)) => {
-                va.partial_cmp(&vb).unwrap()
-            },
-            _ => a.0.partial_cmp(&b.0).unwrap()
-        }
+    all_tokens.sort_by(|a, b| match (a.1, b.1) {
+        (Glyph::Variable(va), Glyph::Variable(vb)) => va.partial_cmp(&vb).unwrap(),
+        _ => a.0.partial_cmp(&b.0).unwrap(),
     });
 
     show_symbols(all_tokens, &"glyphs-all.svg".to_string());
